@@ -25,6 +25,7 @@ using namespace qpdf;
 using namespace std::literals;
 
 using Objects = QPDF::Doc::Objects;
+using Parser = impl::Parser;
 
 QPDFXRefEntry::QPDFXRefEntry() = default;
 
@@ -280,6 +281,12 @@ Objects::parse(char const* password)
         // QPDFs created from JSON have an empty xref table and no root object yet.
         throw damagedPDF("", -1, "unable to find page tree");
     }
+    if (m->cf.max_warnings()) {
+        if (m->pages.empty()) {
+            throw damagedPDF("", -1, "no pages found");
+        }
+        (void)m->cf.max_warnings(0);
+    }
 }
 
 void
@@ -356,12 +363,18 @@ Objects::reconstruct_xref(QPDFExc& e, bool found_startxref)
             auto t2 = m->objects.readToken(*m->file, MAX_LEN);
             if (t2.isInteger() && m->objects.readToken(*m->file, MAX_LEN).isWord("obj")) {
                 int obj = QUtil::string_to_int(t1.getValue().c_str());
-                int gen = QUtil::string_to_int(t2.getValue().c_str());
-                if (obj <= m->xref_table_max_id) {
-                    found_objects.emplace_back(obj, gen, token_start);
-                } else {
-                    warn(damagedPDF(
-                        "", -1, "ignoring object with impossibly large id " + std::to_string(obj)));
+                if (obj > 0) {
+                    int gen = QUtil::string_to_int(t2.getValue().c_str());
+                    if (0 <= gen && gen < 65535) {
+                        if (obj <= m->xref_table_max_id) {
+                            found_objects.emplace_back(obj, gen, token_start);
+                        } else {
+                            warn(damagedPDF(
+                                "",
+                                -1,
+                                "ignoring object with impossibly large id " + std::to_string(obj)));
+                        }
+                    }
                 }
             }
             m->file->seek(pos, SEEK_SET);
@@ -1287,7 +1300,7 @@ Objects::readTrailer()
 {
     qpdf_offset_t offset = m->file->tell();
     auto object =
-        QPDFParser::parse(*m->file, "trailer", m->tokenizer, nullptr, qpdf, m->reconstructed_xref);
+        Parser::parse(*m->file, "trailer", m->tokenizer, nullptr, qpdf, m->reconstructed_xref);
     if (object.isDictionary() && m->objects.readToken(*m->file).isWord("stream")) {
         warn(damagedPDF("trailer", m->file->tell(), "stream keyword found in trailer"));
     }
@@ -1304,7 +1317,7 @@ Objects::readObject(std::string const& description, QPDFObjGen og)
 
     StringDecrypter decrypter{&qpdf, og};
     StringDecrypter* decrypter_ptr = m->encp->encrypted ? &decrypter : nullptr;
-    auto object = QPDFParser::parse(
+    auto object = Parser::parse(
         *m->file,
         m->last_object_description,
         m->tokenizer,
@@ -1506,8 +1519,11 @@ Objects::read_object_start(qpdf_offset_t offset)
     }
     int objid = QUtil::string_to_int(tobjid.getValue().c_str());
     int generation = QUtil::string_to_int(tgen.getValue().c_str());
-    if (objid == 0) {
-        throw damagedPDF(offset, "object with ID 0");
+    if (objid <= 0 || objid >= m->xref_table_max_id || generation < 0 || generation >= 65535) {
+        throw damagedPDF(
+            offset,
+            "object " + std::to_string(objid) + " " + std::to_string(generation) +
+                " has an invalid or impossibly large ID or generation");
     }
     return {objid, generation};
 }
@@ -1834,7 +1850,7 @@ Objects::resolveObjectsInStream(int obj_stream_number)
         if (entry != m->xref_table.end() && entry->second.getType() == 2 &&
             entry->second.getObjStreamNumber() == obj_stream_number) {
             is::OffsetBuffer in("", {b_start + obj_offset, obj_size}, obj_offset);
-            if (auto oh = QPDFParser::parse(in, obj_stream_number, obj_id, m->tokenizer, qpdf)) {
+            if (auto oh = Parser::parse(in, obj_stream_number, obj_id, m->tokenizer, qpdf)) {
                 updateCache(og, oh.obj_sp(), end_before_space, end_after_space);
             }
         } else {

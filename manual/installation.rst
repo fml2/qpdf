@@ -90,6 +90,12 @@ Maintainer Dependencies
   <https://github.com/CastXML/CastXML>`__, which is used by
   ``check_abi`` to generate sizes of all public classes.
 
+- Maintainer mode requires Python 3 for generating files, building
+  documentation, and possibly other activities.
+
+- In maintainer mode, you must have ``bash`` version ≥ and ``zsh``
+  version ≥ 5 for shell completion tests to pass.
+
 Additional Requirements on Windows
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -100,6 +106,13 @@ Additional Requirements on Windows
 - To build with mingw, MSYS2 is recommended with the mingw32 and/or
   mingw64 tool chains. You can also build with MSVC from an MSYS2
   environment.
+
+- ARM64 is supported with Visual Studio only. Configure with ``-A
+  ARM64`` from a Visual Studio generator, or start an ARM64 command
+  shell (``vcvarsarm64.bat`` natively or ``vcvarsamd64_arm64.bat`` to
+  cross compile from x64) and use :command:`cmake-win`, which detects
+  the target architecture from the compiler. MSYS2 does not provide a
+  native ARM64 mingw tool chain.
 
 - qpdf's test suite can run within the MSYS2 environment for both
   mingw and MSVC-based builds.
@@ -312,7 +325,7 @@ Options for Working on qpdf
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ENABLE_COVERAGE
-  Compile with ``--coverage``. See README-maintainer.md for
+  Compile with ``--coverage``. See README-developer.md for
   information about generating coverage reports.
 
 ENABLE_QTC
@@ -331,6 +344,10 @@ GENERATE_AUTO_JOB
   command-line arguments to the qpdf CLI or updating
   :file:`manual/cli.rst` in the qpdf sources, you should turn this on.
   This option requires Python 3.
+
+REQUIRE_SHARED Automated tests for shell completion are ordinarily
+  skipped if new enough versions of the shells are not available. With
+  this option, lack of shell availability causes a test failure.
 
 WERROR
   Make any compiler warnings into errors. We want qpdf to compile free
@@ -370,6 +387,8 @@ MAINTAINER_MODE
   - ``WERROR``
 
   - ``REQUIRE_NATIVE_CRYPTO``
+
+  - ``REQUIRE_SHELLS``
 
   It is possible to turn ``BUILD_DOC`` off in maintainer mode so that
   the extra requirements for building documentation don't have to be
@@ -687,7 +706,7 @@ and cmake options. There are a few exceptions:
   ``REQUIRE_CRYPTO_NATIVE``. For details, see :ref:`crypto.build`.
 
 - The ``--enable-external-libs`` option is no longer available. The
-  cmake build detects the presence of ``external-libs`` automatically.
+  cmake build detects the presence of external libs automatically.
   See :file:`README-windows.md` in the source distribution for a more
   in-depth discussion.
 

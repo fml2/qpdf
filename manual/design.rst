@@ -56,7 +56,7 @@ unacceptable resource usage, is counter-productive rather than useful.
 
 To accommodate the needs of those who use qpdf as a tool for inspecting and
 investigating PDF files, qpdf version 12.3 introduced a special
-``ìnspection mode`` which is enabled using the
+``inspection mode`` which is enabled using the
 ``qpdf::global::options::inspection_mode`` function. In inspection mode, only a
 very limited set of basic operations is supported and a number of automatic
 repairs are disabled. Transformations of the input files such as linearizing files,
@@ -66,6 +66,9 @@ document and object helpers.
 Inspection mode is intended for manual investigations and repairs. As such,
 stability is less of a concern than for other uses of qpdf. The exact effect
 of specifying inspection mode will evolve from version to version.
+
+Before using inspection mode, please read :ref:`inspection` for more details
+about its behavior.
 
 .. _design-goals:
 

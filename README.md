@@ -15,7 +15,7 @@ is https://qpdf.sourceforge.io. The source code repository is hosted at GitHub: 
 
 # Verifying Distributions
 
-Official qpdf releases are signed using [cosign](https://docs.sigstore.dev/quickstart/quickstart-cosign/). Each release includes a `sha256` file containing sha256 checksums of all the release files. To verify a release, use `cosign verify-blob`. Example:
+Official qpdf releases are signed using [cosign](https://docs.sigstore.dev/quickstart/quickstart-cosign/). Each release includes a `sha256` file containing sha256 checksums of all the release files. To verify a release, use `sha256sum file`, or similar, to generate the checksum of the file you want to verify and check to make sure it matches what's in the sha256 file. You can verify the sha256 file itself with gpg or with `cosign verify-blob`. Example:
 
 ```
 cosign verify-blob qpdf-x.y.z.sha256 --bundle qpdf-x.y.z.sha256.sigstore \
@@ -28,7 +28,7 @@ The identity `signer-identity@qpdf.org` should be replaced with the name of the 
 * Jay Berkenbilt <ejb@ql.org>
 * Manfred Holger <m.holger@qpdf.org>
 
-qpdf versions prior to version 13 were also signed using Jay Berkenbilt's GPG key, which has fingerprint `C2C9 6B10 011F E009 E6D1  DF82 8A75 D109 9801 2C7E` and can be found at https://q.ql.org/pubkey.asc or downloaded from a public key server. Starting with qpdf 13, releases are signed only using cosign.
+You can also verify qpdf releases using Jay Berkenbilt's GPG key, which has fingerprint `C2C9 6B10 011F E009 E6D1  DF82 8A75 D109 9801 2C7E` and can be found at https://q.ql.org/pubkey.asc or downloaded from a public key server.
 
 # Copyright, License
 
@@ -51,7 +51,8 @@ information. The Artistic License appears in the file [Artistic-2.0](Artistic-2.
 
 # Prerequisites
 
-qpdf requires a C++ compiler that supports C++-17.
+To build and test qpdf, a C++ compiler that supports C++20 is required. To link with qpdf, a C++17-compatible compiler
+is sufficient.
 
 To compile and link something with qpdf, you can use `pkg-config` with package name `libqpdf` or `cmake` with package
 name `qpdf`. Here's an example of a `CMakeLists.txt` file that builds a program with the qpdf library:
@@ -149,7 +150,7 @@ cmake -S . -B build
 cmake --build build --config Release
 ```
 
-Installation can be done with `cmake --install`. Packages can be made with `cpack`.
+Installation can be done with `cmake --install` (you may need to set the `LD_LIBRARY_PATH` variable in your `.bashrc` or similar, with a command such as `export LD_LIBRARY_PATH=/usr/local/lib64:$LD_LIBRARY_PATH`). Packages can be made with `cpack`.
 
 The tests use `qtest`, and the test driver is invoked by `ctest`. To see the real underlying tests,
 run `ctest --verbose` so that you can see `qtest`'s output. If you need to turn off qtest's color output,

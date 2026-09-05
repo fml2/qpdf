@@ -1,7 +1,6 @@
 .. _ticket: https://issues.qpdf.org
 .. _shared null: https://wiki.qpdf.org/PDF-null-objects-vs-qpdf-null-objects
 
-
 .. _release-notes:
 
 Release Notes
@@ -14,14 +13,152 @@ more detail.
 
 .. x.y.z: not yet released
 
-12.3.0: not yet released
+12.4.2: not yet released
+  - Enhancements
+
+    - Improve validation of object ids and generation numbers when reading special objects (such as
+      xref or hint streams) and during reconstruction of damaged files.
+
+    - In --show-linearization, including a listing of all the object numbers that qpdf would assign
+      to each part. Implementation of linearization is inconsistent across tools, so unless qpdf
+      linearized the file, the computed part assignments are not likely to match what's actually in
+      the file.
+
+    - Radically decrease memory usage and improve performance when linearizing certain types of
+      files.
+
+  - Bug fixes
+
+    - Fix some very old, latent linearization bugs. **These will change linearization output for
+      some files**.
+
+      - Previous versions of qpdf incorrectly determined whether an object was *shared*. The correct
+        behavior based on the specification and for correct performance is that an object is shared
+        if it is accessed by more than one *page*. qpdf was treating it as shared if it was reachable
+        from more than one starting point including non-page objects. This would cause objects that
+        were referenced by both page and non-page objects to be placed in part 9, at the end of the
+        file, rather than in the appropriate part based on which pages accessed the object. In
+        practice, it is rare for objects to be accessed by both page and non-page objects, so this
+        won't affect the output of most files.
+
+      - In some cases, the ``Pages`` tree was treated as a shared object and placed earlier in the
+        file than necessary. This was harmless, but incorrect, and it was fixed as a side effect of
+        the performance improvements.
+
+      - If items in the ``Outlines`` dictionary are referenced by pages, the outlines hint table will
+        be absent, and the outlines will appear in the groups of page objects, regardless of the
+        document's page mode.
+
+    - Reject trailing characters in bounded numeric command-line option values instead of silently
+      accepting their numeric prefixes. This is technically a breaking change, but if you were
+      relying on qpdf's behavior of accepting malformed arguments, it's better to fix that.
+
+    - Report a file whose only line is a PDF header as damaged instead of failing with a
+      system error. Reading a line whose end-of-line run reaches the end of the file left the
+      input source one byte before the start of that line, which at offset 0 is a seek to -1.
+
+  - Build changes
+
+    - Create binary release for additional platforms: Windows arm64.
+
+12.4.1: August 27, 2026
+  - Bug fixes
+
+    - Avoid generating JSON with leading zeroes when converting real numbers.
+
+    - Detect and warn in check linearization when the xref stream reports the object containing a
+      compressed object to itself be a compressed object.
+
+  - Enhancements
+
+    - Improve uniformity and accuracy of progress reporting when writing linearized files and
+      files with lots of object streams.
+
+12.4.0: August 9, 2026
+  - Bug fixes
+
+    - Fix error message when :qpdf:ref:`--check` encounters a file without any pages.
+
+    - In ``QPDFAcroFormDocumentHelper::fixCopiedAnnotations`` remove non-array and empty
+      ``/Annots`` entries from copied pages as well as non-dictionary annotations. Fixes a bug
+      that could cause qpdf to throw a logic error when error when copying pages with damaged
+      annotations.
+
+    - Fix failure in QPDFWriter when trailer ``/ID`` entries are invalid.
+
+    - Limit the effect of ``QPDF::setMaxWarnings`` to the initial loading of the PDF file.
+      Any exceptions thrown as a result of the warning limit being exceeded indicate that
+      the file is too damaged to be processed. Throwing the exception after the file is loaded
+      risks that it would be treated like other exceptions that permit further processing.
+
+    - In ``QPDFPageObjectHelper::getMatrixForTransformations`` handle ``/Rotation`` entries
+      that are less than 0 or greater than 360 correctly. Previously they were treated as 0.
+
+  - Security and robustness
+
+    - To reduce the risk of excessive recursion and stack overflows when processing damaged or
+      malicious PDF files, qpdf now enforces conservative limits on the depth of direct objects
+      that may be created using ``QPDFObjectHandle::makeDirect``.
+
+    - To reduce the risk of excessive recursion and stack overflows when processing damaged or
+      malicious PDF files, qpdf now enforces conservative limits on the depth of the pages tree.
+
+    - Detect some duplicate entries in the AcroForm field hierarchy earlier in order to avoid very
+      large runtimes in specially constructed invalid PDF files.
+
+  - Enhancements
+
+    - Rewrite the shell completion functions for zsh and bash. In prior versions
+      of qpdf, the qpdf executable itself was used to provide completion
+      functionality. This was unreliable (didn't work right with spaces in
+      executable name, though there was a workaround), had various bugs when
+      qpdf was wrapped, and was potentially insecure as it could leak sensitive
+      arguments into the environment. The new approach uses ``job.yml`` to
+      autogenerate the completion functions from the same metadata that is used
+      to generate the command-line argument parsing code.
+
+    - :qpdf:ref:`--show-linearization` / ``QPDF::showLinearization`` now attempts to show
+      linearization data even if linearization checks throw an exception. This can be useful for
+      damaged/invalid files.
+
+  - Build changes
+
+    - The new ``REQUIRE_SHELLS`` CMake option causes completion tests to fail if
+      a new enough bash and zsh are not installed. This option is enabled by
+      default in maintainer mode.
+
+    - Windows-specific: `external-libs` is deprecated and is replaced with
+      `vcpkg`. This includes the following changes:
+
+      - Instead of downloading external-libs, you can download and extract the
+        latest zip from
+        <https://github.com/qpdf/qpdf/releases/tag/vcpkg-cache-v1>`__. CMake
+        will automatically use it.
+
+      - The script ``./vcpkg-setup-win`` is available for Windows users who want
+        to use qpdf's vcpkg integration.
+
+12.3.2: January 24, 2026
+  - Bug fixes
+
+    - Fix bug introduced in 12.3.0. If the :qpdf:ref:`--password` was specified
+      for the same file multiple times a usage error was thrown. Specifying
+      the password multiple times is common within the :qpdf:ref:`--pages`
+      option when using the QPDFJob interface.
+
+12.3.1: January 19, 2026
+  - Bug fixes
+
+    - Fix failure of ``QPDFJob::run`` and ``QPDFJob::createQPDF`` when
+      called with a copy of a destroyed ``QPDFJob`` object. This affects
+      using the job interface from pikepdf.
+
+12.3.0: January 10, 2026
   - Release changes
 
-    - Starting with version 12.3.0, we use
-      `cosign <https://docs.sigstore.dev/cosign/>`__, rather than GPG,
-      to sign releases. See the top-level README.md for instructions.
-      We will continue to use GPG for the 12.x series. Starting with
-      qpdf version 13, only cosign will be used.
+    - Starting with version 12.3.0, we use `cosign
+      <https://docs.sigstore.dev/cosign/>`__, in addition to GPG, to
+      sign releases. See the top-level README.md for instructions.
 
   - Build changes
 
@@ -79,8 +216,8 @@ more detail.
 
   - Build fixes
 
-    - Attempt to detect if any > C++-17 changes snuck into any public
-      headers.
+    - Attempt to detect if any > C++17 changes snuck into any public
+      headers and check all private headers compile stand-alone.
 
   - CLI Enhancements
 
@@ -118,6 +255,19 @@ more detail.
     - More sanity checks have been added when files with damaged xref tables
       are recovered.
 
+    - Security and robustness
+
+      - To reduce the risk of excessive recursion and stack overflows when
+        processing damaged or malicious PDF files, qpdf now enforces
+        reasonable limits on nesting and the depth of direct objects that may
+        be created while repairing or recovering documents. These safeguards
+        prevent specially crafted inputs from triggering deep recursion in
+        object-creation routines and causing crashes. The limits are chosen to
+        be conservative by default to avoid breaking legitimate files; they
+        can be adjusted using the new global limits API (see
+        :ref:`global-options`) or via the :qpdf:ref:`--global` CLI option when
+        necessary.
+
   - Other changes
 
     - There has been significant internal refactoring affecting most parts of
@@ -144,7 +294,7 @@ more detail.
 
     - Setting :qpdf:ref:`--compress-streams` to ``n`` or
       ``QPDFWriter::setCompressStreams(false)`` no longer automatically
-      causes the outputfile to be decrypted. Set :qpdf:ref:`--decrypt` if this
+      causes the output file to be decrypted. Set :qpdf:ref:`--decrypt` if this
       is the intended behaviour.
 
     - There has been some refactoring of stream filtering. These are optimized
@@ -264,7 +414,7 @@ more detail.
     - The file ``.idea/cmake.xml`` has been removed. Instead of
       shipping with some CMake profiles in the CLion-specific
       configuration, we now include a ``CMakePresets.json``. There is
-      information about using it in ``README-maintainer.md``. For
+      information about using it in ``README-contributor.md``. For
       most users, running ``cmake`` in the normal way is fine.
       Suggestions are welcome. None of the official builds use cmake
       presets at the time of initial introduction.
@@ -615,7 +765,7 @@ more detail.
       alternative ``zlib`` implementation. There are no dependencies
       anywhere in the qpdf test suite on any particular ``zlib``
       output. Consult the ``ZLIB COMPATIBILITY`` section of
-      ``README-maintainer.md`` for a detailed explanation of how to
+      ``README-contributor.md`` for a detailed explanation of how to
       maintain this.
 
     - The official Windows installers now offers to modify ``PATH``

@@ -25,6 +25,8 @@
 using namespace std::literals;
 using namespace qpdf;
 
+using Parser = impl::Parser;
+
 const Null Null::temp_;
 
 BaseHandle::
@@ -320,9 +322,151 @@ BaseHandle::copy(bool shallow) const
         throw std::logic_error("attempted to shallow copy QPDFObjectHandle from destroyed QPDF");
         return {}; // does not return
     case ::ot_reference:
-        return obj->qpdf->getObject(obj->og).obj_sp();
+        return referenced_object().obj_sp();
     }
     return {}; // unreachable
+}
+
+// This method determines structural equivalence up to a given depth.
+// The default depth is 10.
+//
+// Nomenclature note: ISO 32000-2 Annex J uses the term "equal" for this
+// strict recursive comparison (J.4.1). We use "equivalent_to" here to
+// implement Annex J's "equality", distinguishing it from C++ shallow
+// pointer equality.
+//
+// Implementation notes:
+//
+// (1) We deviate from Annex J by comparing raw streams only, without
+// decoding.
+//
+// (2) Loop detection is expensive and is avoided. If either object has
+// a cycle in its forward orbit, this implementation will return false.
+
+bool
+BaseHandle::equivalent_to(BaseHandle const& other, int depth) const
+{
+    // A. Identity, size & limit checks
+    if (obj == other.obj) {
+        return true;
+    }
+    if (depth < 0) {
+        return false;
+    }
+    size_t size1 = size();
+    size_t size2 = other.size();
+    if (size1 != size2) {
+        return false;
+    }
+    // B. Structural comparison
+    qpdf_object_type_e t1 = resolved_type_code();
+    qpdf_object_type_e t2 = other.resolved_type_code();
+    if (t1 == ::ot_reference) {
+        return referenced_object().equivalent_to(other, depth - 1);
+    }
+    if (t2 == ::ot_reference) {
+        return equivalent_to(other.referenced_object(), depth - 1);
+    }
+    if (t1 != t2) {
+        if ((t1 == ::ot_integer || t1 == ::ot_real) && (t2 == ::ot_integer || t2 == ::ot_real)) {
+            // Numeric equivalence per Annex J
+            return oh().getNumericValue() == other.oh().getNumericValue();
+        }
+        // normalize uninitialized and null
+        return (t1 == ::ot_uninitialized && t2 == ::ot_null) ||
+            (t2 == ::ot_uninitialized && t1 == ::ot_null);
+    }
+    switch (t1) {
+    case ::ot_uninitialized:
+    case ::ot_null:
+        return true;
+    case ::ot_boolean:
+        return std::get<QPDF_Bool>(obj->value).val == std::get<QPDF_Bool>(other.obj->value).val;
+    case ::ot_string:
+        return std::get<QPDF_String>(obj->value).val == std::get<QPDF_String>(other.obj->value).val;
+    case ::ot_name:
+        return std::get<QPDF_Name>(obj->value).name == std::get<QPDF_Name>(other.obj->value).name;
+    case ::ot_array:
+        {
+            auto const& a1 = std::get<QPDF_Array>(obj->value);
+            auto const& a2 = std::get<QPDF_Array>(other.obj->value);
+            // sizes size1, size2 were calculated above and checked to be equal
+            if (!a1.sp && !a2.sp) {
+                for (size_t i = 0; i < size1; ++i) {
+                    if (!a1.elements[i].equivalent_to(a2.elements[i], depth - 1)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            // at least one array is sparse
+            auto get_item = [](QPDF_Array const& arr, size_t idx) -> BaseHandle const& {
+                if (arr.sp) {
+                    auto it = arr.sp->elements.find(idx);
+                    if (it == arr.sp->elements.end()) {
+                        static QPDFObjectHandle null_oh = Null();
+                        return null_oh;
+                    }
+                    return it->second;
+                }
+                return arr.elements[idx];
+            };
+            for (size_t i = 0; i < size1; ++i) {
+                if (!get_item(a1, i).equivalent_to(get_item(a2, i), depth - 1)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    case ::ot_dictionary:
+        {
+            auto const& map1 = std::get<QPDF_Dictionary>(obj->value).items;
+            auto const& map2 = std::get<QPDF_Dictionary>(other.obj->value).items;
+            auto it2 = map2.begin();
+            auto end2 = map2.end();
+            for (auto const& [key1, value1]: map1) {
+                if (value1.null()) {
+                    continue;
+                }
+                while (it2 != end2 && it2->second.null()) {
+                    ++it2;
+                }
+                if (it2 == end2 || key1 != it2->first ||
+                    !value1.equivalent_to(it2->second, depth - 1)) {
+                    return false;
+                }
+                ++it2;
+            }
+            while (it2 != end2 && it2->second.null()) {
+                ++it2;
+            }
+            return it2 == end2;
+        }
+    case ::ot_stream:
+        {
+            auto const& s1 = std::get<QPDF_Stream>(obj->value);
+            auto const& s2 = std::get<QPDF_Stream>(other.obj->value);
+            if (!s1.m->stream_dict.equivalent_to(s2.m->stream_dict, depth - 1)) {
+                return false;
+            }
+            return s1.m->stream_data->view() == s2.m->stream_data->view();
+        }
+    case ::ot_operator:
+        throw std::logic_error("Internal error in BaseHandle::equivalent_to: found ot_operator");
+    case ::ot_inlineimage:
+        throw std::logic_error("Internal error in BaseHandle::equivalent_to: found ot_inlineimage");
+    case ::ot_integer:
+        return std::get<QPDF_Integer>(obj->value).val ==
+            std::get<QPDF_Integer>(other.obj->value).val;
+    case ::ot_real:
+        return oh().getNumericValue() == other.oh().getNumericValue();
+    case ::ot_unresolved: // cannot determine equivalence so return false
+    case ::ot_reference:  // handled above
+    case ::ot_destroyed:  // should not happen
+    case ::ot_reserved:   // should not happen
+        return false;
+    }
+    return false; // unreachable
 }
 
 std::string
@@ -430,6 +574,15 @@ BaseHandle::write_json(int json_version, JSON::Writer& p) const
                 p << "0" << val;
             } else if (val.length() >= 2 && val.at(0) == '-' && val.at(1) == '.') {
                 p << "-0." << val.substr(2);
+            } else if (val.at(0) == '0') {
+                auto i = val.find_first_not_of('0');
+                if (i == std::string::npos) {
+                    p << "0";
+                } else if (val.at(i) == '.') {
+                    p << "0" << val.substr(i);
+                } else {
+                    p << val.substr(i);
+                }
             } else {
                 p << val;
             }
@@ -576,28 +729,6 @@ BaseHandle::disconnect(bool only_direct)
     }
     obj->qpdf = nullptr;
     obj->og = QPDFObjGen();
-}
-
-std::string
-QPDFObject::getStringValue() const
-{
-    switch (getResolvedTypeCode()) {
-    case ::ot_real:
-        return std::get<QPDF_Real>(value).val;
-    case ::ot_string:
-        return std::get<QPDF_String>(value).val;
-    case ::ot_name:
-        return std::get<QPDF_Name>(value).name;
-    case ::ot_operator:
-        return std::get<QPDF_Operator>(value).val;
-    case ::ot_inlineimage:
-        return std::get<QPDF_InlineImage>(value).val;
-    case ::ot_reference:
-        return std::get<QPDF_Reference>(value).obj->getStringValue();
-    default:
-        throw std::logic_error("Internal error in QPDFObject::getStringValue");
-    }
-    return ""; // unreachable
 }
 
 bool
@@ -779,7 +910,11 @@ QPDFObjectHandle::isDictionaryOfType(std::string const& type, std::string const&
 bool
 QPDFObjectHandle::isStreamOfType(std::string const& type, std::string const& subtype) const
 {
-    return isStream() && getDict().isDictionaryOfType(type, subtype);
+    if (auto stream = as_stream()) {
+        return stream && (type.empty() || stream.Type() == type) &&
+            (subtype.empty() || stream.Subtype() == subtype);
+    }
+    return false;
 }
 
 // Bool accessors
@@ -918,23 +1053,21 @@ QPDFObjectHandle::getValueAsUInt(unsigned int& value) const
 std::string
 QPDFObjectHandle::getRealValue() const
 {
-    if (isReal()) {
-        return obj->getStringValue();
-    } else {
-        typeWarning("real", "returning 0.0");
-        QTC::TC("qpdf", "QPDFObjectHandle real returning 0.0");
-        return "0.0";
+    if (auto* real = as<QPDF_Real>()) {
+        return real->val;
     }
+    typeWarning("real", "returning 0.0");
+    return "0.0";
 }
 
 bool
 QPDFObjectHandle::getValueAsReal(std::string& value) const
 {
-    if (!isReal()) {
-        return false;
+    if (auto* real = as<QPDF_Real>()) {
+        value = real->val;
+        return true;
     }
-    value = obj->getStringValue();
-    return true;
+    return false;
 }
 
 // Name methods
@@ -968,22 +1101,21 @@ Name::value() const
 std::string
 QPDFObjectHandle::getName() const
 {
-    if (isName()) {
-        return obj->getStringValue();
-    } else {
-        typeWarning("name", "returning dummy name");
-        return "/QPDFFakeName";
+    if (auto* name = as<QPDF_Name>()) {
+        return name->name;
     }
+    typeWarning("name", "returning dummy name");
+    return "/QPDFFakeName";
 }
 
 bool
 QPDFObjectHandle::getValueAsName(std::string& value) const
 {
-    if (!isName()) {
-        return false;
+    if (auto* name = as<QPDF_Name>()) {
+        value = name->name;
+        return true;
     }
-    value = obj->getStringValue();
-    return true;
+    return false;
 }
 
 // String methods
@@ -1097,45 +1229,41 @@ QPDFObjectHandle::getValueAsUTF8(std::string& value) const
 std::string
 QPDFObjectHandle::getOperatorValue() const
 {
-    if (isOperator()) {
-        return obj->getStringValue();
-    } else {
-        typeWarning("operator", "returning fake value");
-        QTC::TC("qpdf", "QPDFObjectHandle operator returning fake value");
-        return "QPDFFAKE";
+    if (auto* op = as<QPDF_Operator>()) {
+        return op->val;
     }
+    typeWarning("operator", "returning fake value");
+    return "QPDFFAKE";
 }
 
 bool
 QPDFObjectHandle::getValueAsOperator(std::string& value) const
 {
-    if (!isOperator()) {
-        return false;
+    if (auto* op = as<QPDF_Operator>()) {
+        value = op->val;
+        return true;
     }
-    value = obj->getStringValue();
-    return true;
+    return false;
 }
 
 std::string
 QPDFObjectHandle::getInlineImageValue() const
 {
-    if (isInlineImage()) {
-        return obj->getStringValue();
-    } else {
-        typeWarning("inlineimage", "returning empty data");
-        QTC::TC("qpdf", "QPDFObjectHandle inlineimage returning empty data");
-        return "";
+    if (auto* ii = as<QPDF_InlineImage>()) {
+        return ii->val;
     }
+    typeWarning("inlineimage", "returning empty data");
+    return {};
 }
 
 bool
 QPDFObjectHandle::getValueAsInlineImage(std::string& value) const
 {
-    if (!isInlineImage()) {
-        return false;
+    if (auto* ii = as<QPDF_InlineImage>()) {
+        value = ii->val;
+        return true;
     }
-    value = obj->getStringValue();
-    return true;
+    return false;
 }
 
 // Array accessors and mutators are in QPDF_Array.cc
@@ -1540,7 +1668,7 @@ QPDFObjectHandle::parse(
     QPDF* context, std::string const& object_str, std::string const& object_description)
 {
     auto input = is::OffsetBuffer("parsed object", object_str);
-    auto result = QPDFParser::parse(input, object_description, context);
+    auto result = Parser::parse(input, object_description, context);
     size_t offset = QIntC::to_size(input.tell());
     while (offset < object_str.length()) {
         if (!isspace(object_str.at(offset))) {
@@ -1661,7 +1789,8 @@ QPDFObjectHandle::parseContentStream_data(
     auto input = is::OffsetBuffer(description, stream_data);
     Tokenizer tokenizer;
     tokenizer.allowEOF();
-    auto sp_description = QPDFParser::make_description(description, "content");
+    auto max_bad_count = Limits::parser_max_errors();
+    auto sp_description = Parser::make_description(description, "content");
     while (QIntC::to_size(input.tell()) < stream_length) {
         // Read a token and seek to the beginning. The offset we get from this process is the
         // beginning of the next non-ignorable (space, comment) token. This way, the offset and
@@ -1669,16 +1798,31 @@ QPDFObjectHandle::parseContentStream_data(
         tokenizer.nextToken(input, "content", true);
         qpdf_offset_t offset = input.getLastOffset();
         input.seek(offset, SEEK_SET);
-        auto obj = QPDFParser::parse_content(input, sp_description, tokenizer, context);
-        if (!obj) {
+        auto [obj, empty] = Parser::parse_content(input, sp_description, tokenizer, context);
+        if (empty) {
             // EOF
-            break;
+            return;
+        }
+        if (!obj) {
+            if (max_bad_count && --max_bad_count == 0) {
+                Limits::error();
+                warn(
+                    context,
+                    {qpdf_e_damaged_pdf,
+                     description,
+                     "stream data",
+                     input.tell(),
+                     "limits error(parser-max-errors): too many errors during content stream "
+                     "parsing"});
+                return;
+            }
+            obj = newNull();
         }
         size_t length = QIntC::to_size(input.tell() - offset);
         if (callbacks) {
             callbacks->handleObject(obj, QIntC::to_size(offset), length);
         }
-        if (obj.isOperator() && (obj.getOperatorValue() == "ID")) {
+        if (obj.isOperator() && obj.getOperatorValue() == "ID") {
             // Discard next character; it is the space after ID that terminated the token.  Read
             // until end of inline image.
             char ch;
@@ -1731,7 +1875,7 @@ QPDFObjectHandle::parse(
     StringDecrypter* decrypter,
     QPDF* context)
 {
-    return QPDFParser::parse(*input, object_description, tokenizer, empty, decrypter, context);
+    return Parser::parse(*input, object_description, tokenizer, empty, decrypter, context);
 }
 
 qpdf_offset_t
@@ -1927,13 +2071,16 @@ QPDFObjectHandle::unsafeShallowCopy()
 }
 
 void
-QPDFObjectHandle::makeDirect(QPDFObjGen::set& visited, bool stop_at_streams)
+QPDFObjectHandle::makeDirect(uint32_t level, QPDFObjGen::set& visited, bool stop_at_streams)
 {
+    static uint32_t constexpr max_nesting = 500;
+    if (++level > max_nesting + 1) {
+        throw std::runtime_error("QPDFObjectHandle::makeDirect exceeded maximum nesting level");
+    }
     assertInitialized();
 
     auto cur_og = getObjGen();
     if (!visited.add(cur_og)) {
-        QTC::TC("qpdf", "QPDFObjectHandle makeDirect loop");
         throw std::runtime_error("loop detected while converting object from indirect to direct");
     }
 
@@ -1943,7 +2090,7 @@ QPDFObjectHandle::makeDirect(QPDFObjGen::set& visited, bool stop_at_streams)
         std::vector<QPDFObjectHandle> items;
         for (auto const& item: a) {
             items.emplace_back(item);
-            items.back().makeDirect(visited, stop_at_streams);
+            items.back().makeDirect(level, visited, stop_at_streams);
         }
         obj = QPDFObject::create<QPDF_Array>(items);
     } else if (isDictionary()) {
@@ -1951,7 +2098,7 @@ QPDFObjectHandle::makeDirect(QPDFObjGen::set& visited, bool stop_at_streams)
         for (auto const& [key, value]: as_dictionary(strict)) {
             if (!value.null()) {
                 items.insert({key, value});
-                items[key].makeDirect(visited, stop_at_streams);
+                items[key].makeDirect(level, visited, stop_at_streams);
             }
         }
         obj = QPDFObject::create<QPDF_Dictionary>(items);
@@ -1974,7 +2121,7 @@ void
 QPDFObjectHandle::makeDirect(bool allow_streams)
 {
     QPDFObjGen::set visited;
-    makeDirect(visited, allow_streams);
+    makeDirect(0, visited, allow_streams);
 }
 
 void
